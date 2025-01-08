@@ -4,6 +4,7 @@ var morgan = require('morgan')
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser')
+const stripe = require("stripe")(process.env.GATEWAY_KEY);
 const app = express()
 const port = process.env.PORT || 5000
 app.use(cors({
@@ -228,6 +229,25 @@ async function run() {
       }
       res.send({admin})
     })
+    // payment gate way 
+    app.post("/create-payment-intent",verifyToken,  async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100)
+    
+      // Create a PaymentIntent with the order amount and currency
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: "usd",
+        // In the latest version of the API, specifying the `automatic_payment_methods` parameter is optional because Stripe enables its functionality by default.
+       payment_method_types: ['card'],
+      });
+    
+      res.send({
+        clientSecret: paymentIntent.client_secret,
+      });
+    });
+    
+    
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
