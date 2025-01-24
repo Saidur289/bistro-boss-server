@@ -6,7 +6,12 @@ const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser')
 const stripe = require("stripe")(process.env.GATEWAY_KEY);
 const app = express()
+const formData = require('form-data');
+const Mailgun = require('mailgun.js');
+const mailgun = new Mailgun(formData);
+
 const port = process.env.PORT || 5000
+const mg = mailgun.client({username: 'api', key: process.env.MAILGUN_API_KEY || 'key-yourkeyhere'});
 app.use(cors({
   origin: ['http://localhost:5173', 'http://localhost:5174'],
   credentials: true,
@@ -37,6 +42,8 @@ async function run() {
     const reviewCollection = client.db('bistroDB').collection('review')
     const cartCollection = client.db('bistroDB').collection('carts')
     const usersCollection = client.db('bistroDB').collection('users')
+    const paymentsCollection = client.db('bistroDB').collection('payments')
+   
     // generate token 
     app.post('/jwt', async(req, res) => {
       const email = req.body
@@ -229,7 +236,7 @@ async function run() {
       }
       res.send({admin})
     })
-    // payment gate way 
+    // payment gate way  payment releted api
     app.post("/create-payment-intent",verifyToken,  async (req, res) => {
       const { price } = req.body;
       const amount = parseInt(price * 100)
@@ -246,8 +253,104 @@ async function run() {
         clientSecret: paymentIntent.client_secret,
       });
     });
+    // after confirm payment then delete data from my cart and save payment data for payment history page 
+    app.post('/payments', verifyToken , async(req, res) => {
+      const payment = req.body
+      const paymentResult = await paymentsCollection.insertOne(payment)
+      // delete data from my cart after payment 
+      const query = {
+        _id: {
+          $in: payment?.cartIds?.map(id => new ObjectId(id))
+        }
+      }
+      const deleteResult = await cartCollection.deleteMany(query)
+      // send confirmation email
+      mg.messages.create(process.env.MAIL_SENDING_DOMAIN, {
+        from: "Excited User <mailgun@sandbox302dd5fcdddc4d0e8205f5b24136e463.mailgun.org>",
+        to: ["saidur.riaz1@gmail.com"],
+        // to: [`${payment.email}`],
+        subject: "Hello",
+        text: "Bistro Boss Confirmation !",
+        html: `<div>
+        <h2>Thank you for your order</h2>
+        <h4>Your Transaction Id: ${payment.transactionId}</h4>
+        </div>`
+      })
+      .then(msg => console.log(msg)) // logs response data
+      .catch(err => console.log(err)); // logs any
+      res.send({paymentResult, deleteResult})
+
+    })
+    // after user pay money you have show his payment history route for payment history page by his email
+    app.get('/payments/:email', verifyToken, async(req, res) => {
+      const query = {email: req.params.email}
+      if(req.params.email !== req.user?.email) return res.status(403).send({message: 'Forbidden Access'})
+        const result = await paymentsCollection.find().toArray(query)
+      res.send(result)
+    })
     
-    
+    // stats and antics
+    app.get('/admin-stats', verifyToken, verifyAdmin, async(req, res) => {
+      const users = await usersCollection.estimatedDocumentCount()
+      const orders = await paymentsCollection.estimatedDocumentCount()
+      const menuItems = await menuCollection.estimatedDocumentCount()
+      // get price from payment collection using aggrigate 
+      const result = await paymentsCollection.aggregate([
+     {
+      $group: {
+        _id: null,
+        totalPrice: {$sum: '$price'},
+      },
+     },
+      ]).toArray()
+      const revenue = result.length > 0? result[0].totalPrice : 0;
+      res.send({
+        users,
+        orders,
+        menuItems,
+        revenue
+      })
+    })
+    // data user admin page ber chart here i use aggregate pipeline
+  app.get('/order-stat', verifyToken, verifyAdmin,   async(req, res) => {
+    const result = await paymentsCollection.aggregate([
+      {
+        $unwind : '$menuId',
+      },
+      {
+        $addFields: {
+          menuId: {$toObjectId: '$menuId'},
+        },
+      },
+      {
+        $lookup: {
+          from: 'menu',
+          localField: 'menuId',
+          foreignField: '_id',
+          as: 'menuItems',
+        }
+      },
+      {
+        $unwind: '$menuItems',
+      },
+      {
+        $group: {
+          _id: '$menuItems.category',
+          quantity: {$sum: 1},
+          revenue: {$sum: '$menuItems.price'}
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          category: '$_id',
+          quantity: '$quantity',
+          revenue: '$revenue',
+        }
+      }
+    ]).toArray()
+    res.send(result)
+  })
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
