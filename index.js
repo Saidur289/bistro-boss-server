@@ -312,8 +312,9 @@ async function run() {
     })
     // route for ssl payment method
     app.post('/create-ssl-payment', async(req, res) => {
-      const payment = req.body 
+      let payment = req.body 
       const trxid = new ObjectId().toString()
+       payment.transactionId = trxid
       // console.log(payment);
       const initiate = {
        store_id: store_id,
@@ -367,8 +368,22 @@ async function run() {
       // console.log('data', paymentSuccess);
       // send validation request to server 
       const {data} = await axios.get(`https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php?val_id=${paymentSuccess.val_id}&store_id=${store_id}&store_passwd=${store_passwd}&format=json`)
-      if()
+      if(data?.status !== 'VALID') return res.send({message: 'Invalid Payment'})
+        // after validation update payment status 
+      // console.log(data);
+      const updatePayment = await paymentsCollection.updateOne({transactionId: data.tran_id}, {$set: {status: 'Success'}})
+      // delete cart from users carts collection 
+      // find specipic payment id
+      const payment = await paymentsCollection.findOne({transactionId: data.tran_id})
+        const query = {
+          _id: {
+            $in: payment?.cartIds?.map(id => new ObjectId(id))
+          }
+        }
+        const deleteResult = await cartCollection.deleteMany(query)
+      // console.log(updatePayment);
       // console.log('payment valid', isValidPayment);
+      res.redirect('http://localhost:5000/success')
     })
     // stats and antics
     app.get('/admin-stats', verifyToken, verifyAdmin, async(req, res) => {
