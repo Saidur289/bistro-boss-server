@@ -5,6 +5,11 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser')
 const stripe = require("stripe")(process.env.GATEWAY_KEY);
+const SSLCommerzPayment = require('sslcommerz-lts')
+const store_id = 'bistr67951d2a185e3'
+const store_passwd = 'bistr67951d2a185e3@ssl'
+const is_live = false //true for live, false for sandbox
+
 const app = express()
 const formData = require('form-data');
 const Mailgun = require('mailgun.js');
@@ -20,9 +25,11 @@ app.use(cors({
 app.use(express.json())
 app.use(cookieParser())
 app.use(morgan('dev'))
+app.use(express.urlencoded())
 
 
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const { default: axios } = require('axios');
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.9cbr8.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -33,6 +40,21 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   }
 });
+// Store ID: bistr67951d2a185e3
+// Store Password (API/Secret Key): bistr67951d2a185e3@ssl
+
+
+// Merchant Panel URL: https://sandbox.sslcommerz.com/manage/ (Credential as you inputted in the time of registration)
+
+
+ 
+// Store name: testbistrlt85
+// Registered URL: www.bistrodb.com
+// Session API to generate transaction: https://sandbox.sslcommerz.com/gwprocess/v3/api.php
+// Validation API: https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php?wsdl
+// Validation API (Web Service) name: https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php
+ 
+// You may check our plugins available for multiple carts and libraries: https://github.com/sslcommerz
 
 async function run() {
   try {
@@ -288,7 +310,66 @@ async function run() {
         const result = await paymentsCollection.find().toArray(query)
       res.send(result)
     })
-    
+    // route for ssl payment method
+    app.post('/create-ssl-payment', async(req, res) => {
+      const payment = req.body 
+      const trxid = new ObjectId().toString()
+      // console.log(payment);
+      const initiate = {
+       store_id: store_id,
+       store_passwd: store_passwd,
+        total_amount: `${payment.price}`,
+        currency: 'BDT',
+        tran_id: trxid, // use unique tran_id for each api call
+        success_url: 'http://localhost:5000/success-payment',
+        fail_url: 'http://localhost:5173/fail',
+        cancel_url: 'http://localhost:5173/cancel',
+        ipn_url: 'http://localhost:5000/ipn-success-payment',
+        shipping_method: 'Courier',
+        product_name: 'Computer.',
+        product_category: 'Electronic',
+        product_profile: 'general',
+        cus_name: 'Customer Name',
+        cus_email: `${payment.email}`,
+        cus_add1: 'Dhaka',
+        cus_add2: 'Dhaka',
+        cus_city: 'Dhaka',
+        cus_state: 'Dhaka',
+        cus_postcode: '1000',
+        cus_country: 'Bangladesh',
+        cus_phone: '01711111111',
+        cus_fax: '01711111111',
+        ship_name: 'Customer Name',
+        ship_add1: 'Dhaka',
+        ship_add2: 'Dhaka',
+        ship_city: 'Dhaka',
+        ship_state: 'Dhaka',
+        ship_postcode: 1000,
+        ship_country: 'Bangladesh',
+    };
+      const iniResponse = await axios({
+        url: 'https://sandbox.sslcommerz.com/gwprocess/v4/api.php',
+        method: 'POST',
+        data: initiate,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      })
+      // console.log(iniResponse);
+      const gateWayUrl = iniResponse?.data?.GatewayPageURL
+      // saved data to database status: pending after successful route hit then change it to done
+      const savedData = await paymentsCollection.insertOne(payment)
+      // console.log(gateWayUrl);
+      res.send({gateWayUrl})
+    })
+    app.post('/success-payment', async(req, res) => {
+      const paymentSuccess = req.body 
+      // console.log('data', paymentSuccess);
+      // send validation request to server 
+      const {data} = await axios.get(`https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php?val_id=${paymentSuccess.val_id}&store_id=${store_id}&store_passwd=${store_passwd}&format=json`)
+      if()
+      // console.log('payment valid', isValidPayment);
+    })
     // stats and antics
     app.get('/admin-stats', verifyToken, verifyAdmin, async(req, res) => {
       const users = await usersCollection.estimatedDocumentCount()
